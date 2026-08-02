@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lucy Realtime → 微信 (fal.ai)</title>
+  <style>
+    :root {
+      --panel-bg: rgba(15, 17, 22, 0.86);
+      --border: rgba(255, 255, 255, 0.14);
+      --accent: #4c8dff;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --err: #f87171;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #000;
+      color: #fff;
+      font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    }
+    video { background: #000; }
+
+    #output {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: contain;
+      background: #000;
+      z-index: 0;
+    }
+
+    /* 原始画面小窗预览（镜像），纯净模式下隐藏 */
+    #preview {
+      position: fixed;
+      left: 16px;
+      bottom: 16px;
+      width: 200px;
+      height: 112px;
+      object-fit: cover;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      transform: scaleX(-1);
+      z-index: 2;
+      opacity: 0.9;
+    }
+
+    #statusPill {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      z-index: 3;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: rgba(0,0,0,0.55);
+      border: 1px solid var(--border);
+    }
+    #statusPill.ok  { color: var(--ok); }
+    #statusPill.warn { color: var(--warn); }
+    #statusPill.err  { color: var(--err); }
+
+    #panel {
+      position: fixed;
+      left: 50%;
+      bottom: 16px;
+      transform: translateX(-50%);
+      z-index: 3;
+      width: min(680px, calc(100vw - 32px));
+      background: var(--panel-bg);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .grow { flex: 1; min-width: 120px; }
+
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.07);
+      color: #fff;
+      font-size: 13px;
+      outline: none;
+    }
+    input:focus { border-color: var(--accent); }
+
+    button {
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+      font-size: 13px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover { background: rgba(255,255,255,0.16); }
+    button.primary { background: var(--accent); border-color: var(--accent); }
+    button.primary:hover { filter: brightness(1.1); }
+    button.danger { background: #dc2626; border-color: #dc2626; }
+
+    .chip {
+      padding: 5px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid var(--border);
+      color: #d4d4d8;
+      cursor: pointer;
+    }
+    .chip:hover { color: #fff; border-color: var(--accent); }
+
+    label.chk { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #d4d4d8; cursor: pointer; }
+    input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; }
+
+    .hint { font-size: 11px; color: #9ca3af; }
+    .refname { font-size: 11px; color: var(--ok); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    #pureModeBtn.on { background: #16a34a; border-color: #16a34a; }
+
+    .title { font-size: 12px; color: #9ca3af; }
+  </style>
+</head>
+<body>
+  <video id="output" autoplay muted playsinline></video>
+  <video id="preview" autoplay muted playsinline></video>
+
+  <div id="statusPill" class="warn">未连接</div>
+
+  <div id="panel">
+    <div class="row">
+      <span class="title">fal.ai API Key</span>
+      <input type="password" id="apiKey" class="grow" placeholder="fal.ai 的 Key（格式 xxxx:xxxx，仅保存在本机）" />
+      <button class="primary" id="connectBtn">连接</button>
+      <button id="pureModeBtn">纯净模式</button>
+    </div>
+
+    <div class="row">
+      <input type="text" id="promptInput" class="grow" placeholder="编辑指令，例如：Change the background to a sandy beach with clear blue water." />
+      <label class="chk"><input type="checkbox" id="enhance" checked /> enhance</label>
+      <label class="chk" title="把画面重组为 9:16 竖屏再发送，适配微信视频通话竖屏窗口（改后需重新连接）"><input type="checkbox" id="portrait" checked /> 竖屏9:16</label>
+      <label class="chk" title="裁剪缩放：0=完整显示原画面（上下有黑边），100=裁满竖屏（放大）">
+        裁剪缩放<input type="range" id="zoom" min="0" max="100" value="55" style="width:110px" />
+      </label>
+      <label class="chk" title="发送给模型的画面比例，需与微信视频窗口比例一致（改后需重新连接，OBS 画布也要同步）">比例
+        <select id="aspect" style="background:rgba(255,255,255,0.07);color:#fff;border:1px solid var(--border);border-radius:6px;padding:4px 6px;font-size:12px;">
+          <option value="9:16">9:16 竖屏</option>
+          <option value="3:4">3:4</option>
+          <option value="4:5">4:5</option>
+          <option value="1:1">1:1 方形</option>
+          <option value="4:3">4:3</option>
+          <option value="16:9">16:9 横屏</option>
+        </select>
+      </label>
+      <label class="chk" title="参考图（换角色/换物体用，JPEG/PNG/WebP）">
+        参考图<input type="file" id="imageInput" accept="image/jpeg,image/png,image/webp" hidden />
+      </label>
+      <span id="refName" class="refname"></span>
+      <button id="clearRefBtn" title="清除参考图，回到纯文字编辑">清除参考图</button>
+      <button id="applyBtn" class="primary">应用</button>
+    </div>
+
+    <div class="row">
+      <span class="chip" data-p="Substitute the character in the video with a stunningly beautiful 20-year-old female college student. Refine the face: delicate oval face with a soft jawline, big bright eyes with double eyelids and long lashes, a straight slender nose, soft rosy lips, fair smooth glowing skin. Give her long silky black hair with neat bangs (like a natural black wig), and apply a fresh light makeup look with soft glam eyes, natural blush, and glossy lips. Overall sweet, gentle, youthful college-girl charm, wearing a white T-shirt and jeans.">20岁女大学生</span>
+      <span class="chip" data-p="Substitute the character in the video with the person in the reference image, matching the anime-style appearance, hairstyle, and outfit exactly." data-ref="/星穹铁道.png" data-refname="星穹铁道">星穹铁道角色</span>
+      <span class="chip" data-p="Substitute the character in the video with the person in the reference image, matching the youthful, fresh and natural look, hairstyle and outfit exactly." data-ref="/vmgirl.png" data-refname="青春女生">青春女生</span>
+      <span class="chip" data-p="Add a long black wig with bangs to the person's head, smooth and brighten the skin, slim the face with a soft jawline, enlarge the eyes with a delicate eye makeup, apply natural blush and glossy lip makeup for a beauty-filter look.">假发+美颜</span>
+      <span class="chip" data-p="Change the wall's color to light blue, natural consistent paint finish.">换墙色</span>
+      <span class="chip" data-p="Change the background to a sandy beach with clear blue water.">沙滩背景</span>
+      <span class="chip" data-p="Change the background to a cyberpunk neon city street at night.">赛博朋克</span>
+      <span class="chip" data-p="Change the style of the video to Studio Ghibli animation style.">吉卜力风格</span>
+      <span class="chip" data-p="Add a small dog running around in the background.">加只小狗</span>
+      <span class="chip" data-p="Add a red conical hat, covered in sequins, with a white fluffy trim to the person's head.">加帽子</span>
+      <span class="chip" data-p="Remove the microphone stand from the scene.">移除物体</span>
+    </div>
+
+    <div class="hint">
+      流程：填 API Key → 连接（页面出现变换画面）→ 填指令点"应用"。模型：decart/lucy-2-5/realtime（通用实时编辑，$0.02/秒）。
+      OBS 用"浏览器源"打开本页并勾选 Enable media streaming；浏览器源尺寸与 OBS 画布分辨率要和页面选的"比例"一致（9:16 用 720x1280，3:4 用 720x960，1:1 用 720x720，4:3 用 960x720，16:9 用 1280x720）→ 启动 OBS 虚拟摄像头 → 微信「设置-通用-视频-摄像头」选 OBS Virtual Camera。按 H 键切换纯净模式。
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
