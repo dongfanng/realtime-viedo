@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="data:," />
   <title>Lucy Realtime → 微信 (fal.ai)</title>
   <style>
     :root {
@@ -12,6 +13,8 @@
       --ok: #34d399;
       --warn: #fbbf24;
       --err: #f87171;
+      --stage-w: 360px;
+      --stage-h: 640px;
     }
     * { box-sizing: border-box; }
     html, body {
@@ -23,14 +26,48 @@
     }
     video { background: #000; }
 
-    #output {
+    /* 固定像素舞台：与微信/OBS 画布一致，屏幕采集时只采这块区域 */
+    #stage {
       position: fixed;
-      inset: 0;
-      width: 100vw;
-      height: 100vh;
-      object-fit: contain;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: var(--stage-w);
+      height: var(--stage-h);
       background: #000;
+      overflow: hidden;
       z-index: 0;
+      outline: 1px solid rgba(255,255,255,0.12);
+    }
+    body.pure #stage {
+      /* 保持固定像素，不随全屏显示器变成 16:9 */
+      outline: none;
+      width: var(--stage-w);
+      height: var(--stage-h);
+    }
+    /* 非纯净时显示舞台边框，方便在 OBS 里对照裁切标题栏 */
+    body:not(.pure) #stage {
+      outline: 2px solid var(--accent);
+    }
+
+    #output {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #000;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #outputCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      display: block;
     }
 
     /* 原始画面小窗预览（镜像），纯净模式下隐藏 */
@@ -134,7 +171,10 @@
   </style>
 </head>
 <body>
-  <video id="output" autoplay muted playsinline></video>
+  <div id="stage">
+    <video id="output" autoplay muted playsinline></video>
+    <canvas id="outputCanvas"></canvas>
+  </div>
   <video id="preview" autoplay muted playsinline></video>
 
   <div id="statusPill" class="warn">未连接</div>
@@ -150,20 +190,22 @@
     <div class="row">
       <input type="text" id="promptInput" class="grow" placeholder="编辑指令，例如：Change the background to a sandy beach with clear blue water." />
       <label class="chk"><input type="checkbox" id="enhance" checked /> enhance</label>
-      <label class="chk" title="把画面重组为 9:16 竖屏再发送，适配微信视频通话竖屏窗口（改后需重新连接）"><input type="checkbox" id="portrait" checked /> 竖屏9:16</label>
+      <label class="chk" title="把摄像头画面按所选比例裁剪后发给模型（改后需重新连接）"><input type="checkbox" id="portrait" checked /> 按比例裁剪</label>
       <label class="chk" title="裁剪缩放：0=完整显示原画面（上下有黑边），100=裁满竖屏（放大）">
         裁剪缩放<input type="range" id="zoom" min="0" max="100" value="55" style="width:110px" />
       </label>
-      <label class="chk" title="发送给模型的画面比例，需与微信视频窗口比例一致（改后需重新连接，OBS 画布也要同步）">比例
+      <label class="chk" title="舞台/发送像素。微信视频约 360×640，OBS 画布请设为相同像素（改后需重新连接）">比例
         <select id="aspect" style="background:rgba(255,255,255,0.07);color:#fff;border:1px solid var(--border);border-radius:6px;padding:4px 6px;font-size:12px;">
-          <option value="9:16">9:16 竖屏</option>
-          <option value="3:4">3:4</option>
-          <option value="4:5">4:5</option>
-          <option value="1:1">1:1 方形</option>
-          <option value="4:3">4:3</option>
-          <option value="16:9">16:9 横屏</option>
+          <option value="9:16" selected>9:16 · 360×640 微信</option>
+          <option value="9:16@720">9:16 · 720×1280</option>
+          <option value="3:4">3:4 · 720×960</option>
+          <option value="4:5">4:5 · 720×900</option>
+          <option value="1:1">1:1 · 720×720</option>
+          <option value="4:3">4:3 · 960×720</option>
+          <option value="16:9">16:9 · 1280×720</option>
         </select>
       </label>
+      <button type="button" id="copySizeBtn" title="复制当前舞台像素到剪贴板，方便设 OBS 画布">复制OBS尺寸</button>
       <label class="chk" title="参考图（换角色/换物体用，JPEG/PNG/WebP）">
         参考图<input type="file" id="imageInput" accept="image/jpeg,image/png,image/webp" hidden />
       </label>
@@ -174,6 +216,7 @@
 
     <div class="row">
       <span class="chip" data-p="Substitute the character in the video with a stunningly beautiful 20-year-old female college student. Refine the face: delicate oval face with a soft jawline, big bright eyes with double eyelids and long lashes, a straight slender nose, soft rosy lips, fair smooth glowing skin. Give her long silky black hair with neat bangs (like a natural black wig), and apply a fresh light makeup look with soft glam eyes, natural blush, and glossy lips. Overall sweet, gentle, youthful college-girl charm, wearing a white T-shirt and jeans.">20岁女大学生</span>
+      <span class="chip" data-p="Substitute the character in the video with the person in the reference image, matching the appearance, hairstyle, and outfit exactly." data-ref="/ali.png" data-refname="ali">ali</span>
       <span class="chip" data-p="Substitute the character in the video with the person in the reference image, matching the anime-style appearance, hairstyle, and outfit exactly." data-ref="/星穹铁道.png" data-refname="星穹铁道">星穹铁道角色</span>
       <span class="chip" data-p="Substitute the character in the video with the person in the reference image, matching the youthful, fresh and natural look, hairstyle and outfit exactly." data-ref="/vmgirl.png" data-refname="青春女生">青春女生</span>
       <span class="chip" data-p="Add a long black wig with bangs to the person's head, smooth and brighten the skin, slim the face with a soft jawline, enlarge the eyes with a delicate eye makeup, apply natural blush and glossy lip makeup for a beauty-filter look.">假发+美颜</span>
@@ -188,7 +231,7 @@
 
     <div class="hint">
       流程：填 API Key → 连接（页面出现变换画面）→ 填指令点"应用"。模型：decart/lucy-2-5/realtime（通用实时编辑，$0.02/秒）。
-      OBS 用"浏览器源"打开本页并勾选 Enable media streaming；浏览器源尺寸与 OBS 画布分辨率要和页面选的"比例"一致（9:16 用 720x1280，3:4 用 720x960，1:1 用 720x720，4:3 用 960x720，16:9 用 1280x720）→ 启动 OBS 虚拟摄像头 → 微信「设置-通用-视频-摄像头」选 OBS Virtual Camera。按 H 键切换纯净模式。
+      舞台固定 360×640，不要 F11 全屏（全屏会变成显示器 16:9）。按 H 纯净模式后，OBS 屏幕采集若带标题栏：选中源 → 按住 Option 拖边缘，裁到蓝色舞台框。也可用：npm run capture（Chrome 应用窗，无标签栏）。
     </div>
   </div>
 
